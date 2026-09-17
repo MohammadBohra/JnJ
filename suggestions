@@ -1,0 +1,42 @@
+2. Protect the Attachment Table fieldsEnsure your custom DB utility wrapper handles data safely. 
+Verify DBUtils.updateByFilter isn't dropping object fields,
+or modify it to explicitly guard media fields
+Ensure no payload fields can slip through data except intended targets
+
+cds.tx(req).run(
+    UPDATE(tableName)
+    .set({ 
+        CR_REPONSE_CR_RESPONSE_ID: data.CR_REPONSE_CR_RESPONSE_ID,
+        CHANGE_REQUEST_CHANGE_REQUEST_ID: data.CHANGE_REQUEST_CHANGE_REQUEST_ID 
+    })
+    .where(filter)
+);
+
+
+
+
+1. Avoid Concurrent DB Pool BombardmentReplace the concurrent Promise.all loops with a predictable, sequential for...of loop or execute a single structural batch update to eliminate database locking issues entirely:
+
+// Change this:
+// await Promise.all(ATTACHMENTS.map(async (item) => { ... }))
+
+// To this:
+for (const item of ATTACHMENTS) {
+    if (item.QUESTION_ID && item.ID && item.ATTACHMENT_ID) {
+        const crResponseId = crResponseIds.find(row => row.QUESTION_ID === +(item.QUESTION_ID));
+        if (crResponseId) {
+            const setData = { 
+                CR_REPONSE_CR_RESPONSE_ID: crResponseId.CR_RESPONSE_ID, 
+                CHANGE_REQUEST_CHANGE_REQUEST_ID: changeRequestID 
+            };
+            const filter = { ID: item.ID, ATTACHMENT_ID: item.ATTACHMENT_ID };
+            const affected = await DBUtils.updateByFilter(req, "COM_JNJ_Z_ATTACHMENTS", setData, filter);
+            console.log(`Attachment ID ${item.ATTACHMENT_ID} updated: ${affected} rows`);
+            item.CR_RESPONSE_ID = crResponseId.CR_RESPONSE_ID;
+        } else {
+            console.warn(`Warning: No matching crResponseId found for QUESTION_ID ${item.QUESTION_ID}`);
+        }
+    } else {
+        throw new Error(`Attachment data invalid`);
+    }
+}
