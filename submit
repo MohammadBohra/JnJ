@@ -1,0 +1,137 @@
+ srv.on("insert_local_elements", async (req) => {
+        console.log("Inside insert local data elements");
+        try {
+ 
+            req.loggedInUser = (await GeneralUtils.getUserInfo(req))?.logonName ?? '';
+            req.currentTimeStamp = await GeneralUtils.getCurrentTimeStamp(req);
+            req.schemaName = schemaName;
+            req.config = {
+                PRIMARY_KEY : 'CHANGE_REQUEST_ID'
+            };
+           
+            const  requestData = req.data.inputDataElements;
+            req.IS_REVISION = requestData.CHANGE_REQUESTS?.MDG_CHANGE_REQ_ID > 0;
+ 
+            if (!requestData?.CHANGE_REQUESTS || !requestData?.ZCR_RESPONSES || !requestData?.ATTACHMENTS) {
+                throw new Error(`insert_local_elements:: Invalid payload`);
+            }
+ 
+            // Insert Change Request
+            const changeRequestID = await CommonUtils.insertChangeRequestNew(req, requestData);
+            if (!changeRequestID) throw new Error("insert Change request failed");
+ 
+            const zcrResponse = await CommonUtils.insertQuestioneries(req, changeRequestID, requestData.ZCR_RESPONSES);
+            if (!zcrResponse) throw new Error("insert Z_CR_RESPONSES failed");
+ 
+            console.log(`insertLocalDataElements:: BTP data stored successfully!!!`);
+            if (req.data.operationName === 'EDIT_DRAFT_ALL') {
+                return {
+                    status: `SUCCESS`,
+                    changeRequestID: changeRequestID,
+                    data: requestData,
+                    message: `Successfully inserted data`,
+                };
+            }
+ 
+            //SAP services calls
+            const sapResponse = await DataElementAppUtils.performSapPostOperation(req, requestData);
+            const IS_SUCCESS_REQ = sapResponse?.success && sapResponse?.MDG_CHANGE_REQ_ID > 0;
+ 
+            if (IS_SUCCESS_REQ) {
+                console.log(`insertLocalDateElements:: Updating Change request status to SUBMITTED`);
+ 
+                await CommonUtils.updateCRFinalStatus(req, changeRequestID, sapResponse.MDG_CHANGE_REQ_ID, requestData);
+            }
+ 
+            return {
+                status: IS_SUCCESS_REQ ? `SUCCESS` : `ERROR`,
+                changeRequestID: changeRequestID,
+                data: requestData,
+                message: sapResponse.isException ? sapResponse.message : `Successfully inserted data`,
+            };
+ 
+ 
+        } catch (error) {
+            console.log(`insert_local_elements:: Error:${error?.message ?? error}`);
+            throw new Error(error);
+        }
+    })
+ 
+const insertQuestioneries = async function (req, changeRequestID, data) {
+    try {
+        console.log(`In insertQuestioneries`);
+        const TABLE_NAME = 'COM_JNJ_Z_CR_RESPONSES',
+            SEQUENCE_KEY = `Seq_CR_Response_ID`,
+            filter = { CHANGE_REQUEST_CHANGE_REQUEST_ID: changeRequestID }
+        let existingQuestioneries = [], toBeInserted = [], affectedRows = 0;
+        if (changeRequestID) {
+            existingQuestioneries = await DBUtils.readDataByFilter(req, [`CR_RESPONSE_ID`, `QUESTION_ID`], TABLE_NAME, filter);
+        }
+ 
+        await Promise.all(data.map(async (row) => {
+            const existing = existingQuestioneries.find((item) => row.QUESTION_ID && item.QUESTION_ID == row.QUESTION_ID);
+            if (existing) {
+                const result = await DBUtils.updateByFilter(req, TABLE_NAME, row, { ...filter, CR_RESPONSE_ID: existing.CR_RESPONSE_ID });
+                affectedRows += result;
+                existingQuestioneries = existingQuestioneries.filter(item => item.CR_RESPONSE_ID !== existing.CR_RESPONSE_ID);// Remove from existing
+            } else {
+                row.CR_RESPONSE_ID = await DBUtils.getNextSequence(req, req.schemaName, SEQUENCE_KEY);
+                row.CHANGE_REQUEST_CHANGE_REQUEST_ID = changeRequestID;
+                getAuditFieldCreate(row, req.loggedInUser, req.currentTimeStamp);
+                toBeInserted.push(row);
+            }
+        }));
+ 
+        //Delete unused questioneries(Case will occure when draft functionality)
+        if (existingQuestioneries.length) {
+            const ids = (existingQuestioneries.map(id => id.CR_RESPONSE_ID)).filter(Boolean);
+            if (ids.length) await DBUtils.deleteByFilter(req, TABLE_NAME, { ...filter, CR_RESPONSE_ID: ids });
+        }
+ 
+        if (toBeInserted.length) {
+            const insertedRows = await DBUtils.insertInBatches(req, TABLE_NAME, toBeInserted);
+            affectedRows += insertedRows ?? 0;
+        }
+ 
+        //Update attachment table with changerequestid and cr response id
+        await updateAttachment(req, data, changeRequestID)
+        return affectedRows;
+    } catch (error) {
+        console.log(`Error in insertQuestioneries :: ${error}`);
+        throw error?.message;
+    }
+}
+ 
+const updateAttachment = async (req, data, changeRequestID) => {
+    const { ATTACHMENTS = [] } = req.data.inputDataElements;
+    if (ATTACHMENTS?.length === 0) {
+        return;
+    }
+ 
+    const questionIds = data.filter((item) => item?.RESPONSE_TYPE === "ATTACHMENT")?.map(id => id.QUESTION_ID);
+    if (questionIds.length === 0) {
+        throw new Error(`No attachment information provided`);
+    }
+    const crResponseIds = await DBUtils.readDataByFilter(req, ['CR_RESPONSE_ID', 'QUESTION_ID'], "COM_JNJ_Z_CR_RESPONSES", { CHANGE_REQUEST_CHANGE_REQUEST_ID: changeRequestID, QUESTION_ID: questionIds });
+    await Promise.all(ATTACHMENTS.map(async (item) => {
+        if (item.QUESTION_ID && item.ID && item.ATTACHMENT_ID) {
+            const crResponseId = crResponseIds.find(row => row.QUESTION_ID === +(item.QUESTION_ID));
+            if (crResponseId) {
+                const setData = { CR_REPONSE_CR_RESPONSE_ID: crResponseId.CR_RESPONSE_ID, CHANGE_REQUEST_CHANGE_REQUEST_ID: changeRequestID };
+                const filter = { ID: item.ID, ATTACHMENT_ID: item.ATTACHMENT_ID };
+                const affected = await DBUtils.updateByFilter(req, "COM_JNJ_Z_ATTACHMENTS", setData, filter);
+                console.log(affected);
+                item.CR_RESPONSE_ID = crResponseId.CR_RESPONSE_ID;
+            }
+        } else {
+            throw new Error(`Attachment data invalid`)
+        }
+    }))
+}
+
+
+
+exports.updateByFilter = async function (req, tableName, data, filter) {
+    return cds.tx(req).run(UPDATE(tableName).set(data).where(filter));
+}
+ 
