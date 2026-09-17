@@ -1,0 +1,26 @@
+const insertChangeRequestNew = async function (req, insertData) {
+    try {
+        const TABLE_NAME = 'COM_JNJ_Z_CHANGEREQUESTS';
+        let payload = insertData.CHANGE_REQUESTS;
+        let result = null;
+        if (payload?.CHANGE_REQUEST_ID) {
+            payload["MODIFIEDAT"] = req.currentTimeStamp;
+            payload["MODIFIEDBY"] = req.loggedInUser;
+            result = await DBUtils.updateData(req, 'UPDATE', req.schemaName, TABLE_NAME, ['CHANGE_REQUEST_ID'], payload);
+        } else {
+            payload.MDG_CHANGE_REQ_ID = payload.MDG_CHANGE_REQ_ID || 0;
+            payload.CHANGE_REQUEST_ID = await DBUtils.getNextSequence(req, req.schemaName, 'Seq_ChangeRequestID');
+            getAuditFieldCreate(payload, req.loggedInUser, req.currentTimeStamp);
+            result = await cds.tx(req).run(INSERT.into(TABLE_NAME).entries(payload));
+        }
+        if (result) {
+            //Insert Additional Comment into Z_ADDTL_COMMENTS
+            await additionalComments(req);
+            return payload.CHANGE_REQUEST_ID;
+        }
+        return null;
+    } catch (error) {
+        console.log("<========== CommonUtils :: insertChangeRequestNew:: Error  ::  " + JSON.stringify(error));
+        throw error;
+    }
+}
