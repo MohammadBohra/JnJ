@@ -1,0 +1,103 @@
+srv.before("CREATE", [Z_ATTACHMENTS], async (req) => {
+        var userInfo = await GeneralUtils.getUserInfo(req),
+            loggedInUser = userInfo.logonName,
+            currentTimeStamp = await GeneralUtils.getCurrentTimeStamp(req),
+            seqNextVal = await cds.tx(req).run('SELECT "' + schemaName + '"."Seq_Attachment".NEXTVAL FROM DUMMY')
+                .then(result => {
+                    return result[0]['Seq_Attachment.NEXTVAL'];
+                }).catch(error => {
+                    console.log("<==========    CHANGE REQUEST  In SEQUENCE Error Block   ==========>      ::      " + JSON.stringify(error));
+                    return error;
+                });
+ 
+        req.data.ATTACHMENT_ID = seqNextVal;
+        req.data.CREATEDAT = currentTimeStamp;
+        req.data.CREATEDBY = loggedInUser;
+        req.data.MODIFIEDAT = null;
+        req.data.MODIFIEDBY = null;
+        req.data.CONTENT = null;
+    });
+ 
+    //Before Exit Event Handler invoked before updating Z_ATTACHMENT
+    srv.before("UPDATE", [Z_ATTACHMENTS], async (req) => {
+        console.log("INSIDE UPDATE Z_ATTACHMENTS.........");
+        var userInfo = await GeneralUtils.getUserInfo(req),
+            loggedInUser = userInfo.logonName,
+            currentTimeStamp = await GeneralUtils.getCurrentTimeStamp(req),
+            id = req.data.ID,
+            attachmentID = req.data.ATTACHMENT_ID,
+            stream = new PassThrough(),
+            chunks = [];
+ 
+        if (req.data.content) {
+            req.data.content.pipe(stream);
+ 
+            return await new Promise((resolve, reject) => {
+ 
+                stream.on('data', (chunk) => {
+                    chunks.push(chunk);
+                });
+ 
+                stream.on('end', async () => {
+                    var dbTrans;
+                    try {
+                        var url2 = `/odata/v2/application-model/Z_ATTACHMENTS(ID=${id},ATTACHMENT_ID=${attachmentID})/content`,
+                            url4 = `/odata/v4/application-model/Z_ATTACHMENTS(ID=${id},ATTACHMENT_ID=${attachmentID})/content`,
+                            buffer = Buffer.concat(chunks),
+                            dbCon = await cds.connect.to("db"),
+                            dbTrans = dbCon.tx(req),
+                            obj = await dbTrans.read(Z_ATTACHMENTS, id);
+ 
+                        obj.FILE_NAME = decodeURI(req.headers.slug);
+                        obj.DOC_TYPE = req.headers['content-type'];
+                        obj.content = buffer;
+                        obj.ATTACHMENT_URL_V4 = url4;
+                        obj.ATTACHMENT_URL_V2 = url2;
+ 
+                        obj.CREATEDAT = currentTimeStamp;
+                        obj.CREATEDBY = loggedInUser;
+                        obj.MODIFIEDAT = null;
+                        obj.MODIFIEDBY = null;
+ 
+                        const affectedRows=await dbTrans.update(Z_ATTACHMENTS, id, attachmentID).with(obj);
+                        console.log(affectedRows)
+                        await dbTrans.commit();
+ 
+                        delete obj['content'];
+                        resolve(req._.res.send({
+                            message: "Attachment Successfully Uploaded.....",
+                            status: 200,
+                            object: obj
+                        }));
+                    } catch (error) {
+                        console.log("<==========    Error from Z_ATTACHMENTS - UPDATE -  " + JSON.stringify(error));
+                        if(dbTrans){
+                            await dbTrans.rollback();
+                        }
+                        reject(req.error({
+                            code: 999,
+                            message: "Error from Z_ATTACHMENTS - UPDATE - " + error.message,
+                            target: '',
+                            status: 500
+                        }))
+                    }
+                });
+            });
+        } else {
+            console.log("111111111222222222233333333#########################################       " + JSON.stringify(req.data));
+        }
+    });
+ 
+POST http://localhost:4004/odata/v2/application-model/Z_ATTACHMENTS
+content-type:multipart/mixed
+ 
+{}
+ 
+ 
+###
+PUT http://localhost:4004/odata/v2/application-model/Z_ATTACHMENTS(ID=72afe034-c55e-47c3-8001-abe8ac980f96,ATTACHMENT_ID=11065)/content
+content-type:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+slug:cost_center_create_Attachment_1.xlsx
+ 
+<cost_center_create 500.xlsx
+ 
