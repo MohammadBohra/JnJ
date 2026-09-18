@@ -1,0 +1,62 @@
+const axios = require('axios');
+const fs = require('fs');
+
+async function testProductionBug() {
+    // ADJUST THIS if your local CAP server runs on a different port or path
+    const BASE_URL = 'http://localhost:4004/odata/v2/application-model';
+    
+    try {
+        // 1. Create the attachment record shell
+        console.log("1. Creating attachment record shell...");
+        const createRes = await axios.post(`${BASE_URL}/Z_ATTACHMENTS`, {}, {
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        // Dynamically read keys from the POST response payload
+        // Adjust these property paths if your OData response structure differs
+        const ID = createRes.data?.d?.ID || createRes.data?.ID;
+        const ATTACHMENT_ID = createRes.data?.d?.ATTACHMENT_ID || createRes.data?.ATTACHMENT_ID;
+
+        if (!ID || !ATTACHMENT_ID) {
+            throw new Error(`Could not retrieve generated IDs from response: ${JSON.stringify(createRes.data)}`);
+        }
+
+        console.log(`Successfully generated -> ID: ${ID}, ATTACHMENT_ID: ${ATTACHMENT_ID}`);
+
+        // 2. Read the large file buffer
+        if (!fs.existsSync('./large_test_file.xlsx')) {
+            throw new Error("File './large_test_file.xlsx' not found. Please place a file here to test.");
+        }
+        const fileBuffer = fs.readFileSync('./large_test_file.xlsx');
+
+        console.log("2. Firing Upload and Submit SIMULTANEOUSLY to trigger race condition...");
+        
+        // Define the binary PUT stream upload request
+        const uploadPromise = axios.put(`${BASE_URL}/Z_ATTACHMENTS(ID=${ID},ATTACHMENT_ID=${ATTACHMENT_ID})/content`, fileBuffer, {
+            headers: {
+                'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'slug': 'cost_center_create_Attachment_1.xlsx'
+            }
+        });
+
+        // Define the Submit request (Notice v4 path matches your custom action handler context)
+        const submitPromise = axios.post(`http://localhost:4004/odata/v4/application-model/insert_local_elements`, {
+            inputDataElements: {
+                CHANGE_REQUESTS: { MDG_CHANGE_REQ_ID: 0 },
+                ZCR_RESPONSES: [{ QUESTION_ID: 101, RESPONSE_TYPE: "ATTACHMENT" }],
+                ATTACHMENTS: [{ ID: ID, ATTACHMENT_ID: ATTACHMENT_ID, QUESTION_ID: 101 }]
+            }
+        });
+
+        // Fire both HTTP requests at the exact same millisecond
+        await Promise.all([uploadPromise, submitPromise]);
+        
+        console.log("Execution finished successfully! Open your DB or run a SELECT query on COM_JNJ_Z_ATTACHMENTS.");
+        console.log(`Check row where ID = '${ID}' to see if FILE_NAME or CONTENT became blank.`);
+
+    } catch (error) {
+        console.error("Test execution failed:", error.response?.data || error.message);
+    }
+}
+
+testProductionBug();
