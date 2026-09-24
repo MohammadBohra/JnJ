@@ -1,0 +1,238 @@
+//----------------------------------------------------------------------------------------------*
+//Created By     : 702528065 (Janvi chitale )                                                   *
+//Created on     : 06/24/2026                                                                   *
+//Transport No   : XFIK916962                                                                   *
+//CO Number      : 50458978                                                                     *
+//RICEF No       : TMS_R010                                                                     *
+//Description    : Custom CDS for Netting Report                                                *
+//----------------------------------------------------------------------------------------------*
+//----------------------------------------------------------------------------------------------*
+//Created By     : 702528065 (Janvi chitale )                                                   *
+//Created on     : 09/08/2026                                                                   *
+//Transport No   : XFIK917880                                                                   *
+//CO Number      : 50458978                                                                     *
+//RICEF No       : TMS_R010                                                                     *
+//Description    : AGAT-406138                                                                  *
+//----------------------------------------------------------------------------------------------*
+@AbapCatalog.viewEnhancementCategory: [#NONE]
+@AccessControl.authorizationCheck: #CHECK
+@EndUserText.label: 'Custom Table for Netting Report'
+@Metadata.ignorePropagatedAnnotations: true
+@Metadata.allowExtensions: true
+define view entity ZCDS_TMS_NETTING_DETAIL
+  with parameters
+    // BOC AGAT-406138
+    P_Excng_rate_typ  : kurst_curr,
+    p_conversion_date : datum,
+    P_CYCLE_ID        : ztms_cycle_id
+  // EOC AGAT-406138
+
+  as select from    ZCDS_TMS_IHC_DB_PN                                        as pn
+    left outer join ZCDS_TMS_BKKIT                                            as bk            on bk.RefnoPaym = concat(
+      'XIHB/', concat(
+        pn.PnNumber, concat(
+          '/', pn.PnYear
+        )
+      )
+    )
+    left outer join ztms_ic_calcyc                                            as cyc           on  cyc.cycle_period = substring(
+      cast(
+        bk.DatePost                                                           as abap.char(
+                                                                    8
+                                                                  )
+      ), 5, 2
+    )
+                                                                                               and cyc.cycle_year   = substring(
+      cast(
+        bk.DatePost                                                           as abap.char(
+                                                                    8
+                                                                  )
+      ), 1, 4
+    )
+    left outer join ztms_ic_part                                              as part          on part.account_num = pn.PayAcctno
+                                                                                               or part.account_num = pn.RecAcctno
+    left outer join ZCDS_TMS_BKK42                                            as bkk42         on  bkk42.AcnumInt = bk.AcnumInt
+                                                                                               and bkk42.Bkkrs    = 'XIHB'
+
+    inner join      ZCDS_TMS_VH_PO_STATUS                                     as PO_Status     on PO_Status.PaymentOrderStatus = pn.LastGuiStatus
+    inner join      ZCDS_TMS_TRNS_TYPE_F4                                     as TT            on TT.TrnsType = pn.TrnsType
+  // BOC AGAT-406138 ( Exchange rates are taken directly from paramters )
+  //    left outer join zttms_constants       as CONSTVAL  on  CONSTVAL.name      = 'ZTMS_EXCHNG_RATE_TYP'
+  //                                                       and CONSTVAL.object_id = 'TMS_R010'
+  //EOC AGAT-406138
+  //Join for USD target currency and USD netting rate
+    left outer join ZCDS_TMS_NET_HEG_DTL                                      as FX_IP         on  FX_IP.SourceCurrency    = pn.TrnsCurr
+                                                                                               and FX_IP.TargetCurrency    = 'USD'
+    //BOC AGAT-406138
+    //               and FX_IP.ExchangeRateType  = CONSTVAL.low //'ZT09'
+                                                                                               and FX_IP.ExchangeRateType  = $parameters.P_Excng_rate_typ
+    // EOC AGAT-406138
+                                                                                               and FX_IP.ValidityStartDate <= $session.system_date
+
+
+    left outer join I_ExchangeRateRawData                                     as FX            on  FX.SourceCurrency    = FX_IP.SourceCurrency
+                                                                                               and FX.TargetCurrency    = FX_IP.TargetCurrency
+    //BOC AGAT-406138
+    // and FX.ExchangeRateType  = FX_IP.ExchangeRateType
+                                                                                               and FX.ExchangeRateType  = $parameters.P_Excng_rate_typ
+    //EOC AGAT-406138
+                                                                                               and FX.ValidityStartDate = FX_IP.ValidityStartDate
+  // BOC AGAT-406138
+  //Join for Pre_final Netting rate
+  //Check if rate exists for input date
+    left outer join I_ExchangeRateRawData                                     as FX_Rate       on  FX_Rate.SourceCurrency    = bk.Tcur
+                                                                                               and FX_Rate.TargetCurrency    = bk.Acur
+                                                                                               and FX_Rate.ExchangeRateType  = $parameters.P_Excng_rate_typ
+                                                                                               and FX_Rate.ValidityStartDate = $parameters.p_conversion_date
+
+  //else fetch the latest available date for the same Source and target currency
+    left outer join ZCDS_TMS_NET_HEG_DTL                                      as FX_Input      on  FX_Input.SourceCurrency    = bk.Tcur
+                                                                                               and FX_Input.TargetCurrency    = bk.Acur
+                                                                                               and FX_Input.ExchangeRateType  = $parameters.P_Excng_rate_typ
+                                                                                               and FX_Input.ValidityStartDate <= $session.system_date
+
+    left outer join I_ExchangeRateRawData                                     as FX_Input_rate on  FX_Input_rate.SourceCurrency    = FX_Input.SourceCurrency
+                                                                                               and FX_Input_rate.TargetCurrency    = FX_Input.TargetCurrency
+                                                                                               and FX_Input_rate.ExchangeRateType  = $parameters.P_Excng_rate_typ
+                                                                                               and FX_Input_rate.ValidityStartDate = FX_Input.ValidityStartDate
+  // fetch the previous cycle id
+    left outer join ZCDS_TMS_PREV_CYCLE( P_CYCLE_ID: $parameters.P_CYCLE_ID ) as PREV_CYC      on PREV_CYC.current_cyc = $parameters.P_CYCLE_ID
+
+  //EOC AGAT-406138
+    inner join      zttms_constants                                           as CONST         on  CONST.low       = pn.TrnsType
+                                                                                               and CONST.name      = 'ZTMS_TRNS_TYPE'
+                                                                                               and CONST.object_id = 'TMS_R010'
+
+{
+  key  'XIHB'                                                      as BKKRS,
+  key  pn.PnNumber                                                 as PN_NUMBER,
+  key  pn.PnYear                                                   as PN_YEAR,
+  key  bk.Docno                                                    as DOC_NO,
+  key  pn.StatusCnt                                                as STATUS_CNT,
+  key  cyc.cycle_id                                                as CYCLE_ID,
+  key  cast( bk.AcnumExt as abap.char( 256 ) )                     as ACNUM_INT,
+  key  case
+      when bk.AcnumExt like '%.P'
+      then 'Provisional'
+      else 'Final' end                                             as Netting_badge,
+  key  pn.Guid                                                     as guid,
+       pn.LastGuiStatus                                            as LAST_GUI_STATUS,
+       pn.PayAcctno                                                as PAY_ACCTNO,
+       pn.PayAcchoName                                             as PAY_ACCHO_NAME,
+       pn.PayAcctcurr                                              as PAY_ACCTCURR,
+       pn.RecAcctno                                                as REC_ACCTNO,
+       pn.RecAcchoName                                             as REC_ACCHO_NAME,
+       'XIHB'                                                      as REC_BANK_AREA,
+       pn.RecAcctcurr                                              as REC_ACCTCURR,
+       pn.TrnsType                                                 as TRANS_TYPE,
+       pn.TrnsDirection                                            as TRNS_DIRECTION,
+       pn.TrnsCurr                                                 as TRNS_CURR,
+       @Semantics.amount.currencyCode: 'TRNS_CURR'
+       pn.TrnsAmount                                               as TRNS_AMOUNT,
+       @Semantics.amount.currencyCode: 'PAY_BK_TCUR'
+       bk.TAmount                                                  as PAY_BK_T_AMOUNT,
+       bk.Tcur                                                     as PAY_BK_TCUR,
+       @Semantics.amount.currencyCode: 'PAY_BK_ACUR'
+       bk.AAmount                                                  as PAY_BK_A_AMOUNT,
+       bk.Acur                                                     as PAY_BK_ACUR,
+       bk.Exchngrate                                               as PAY_BK_EXCHNGRATE,
+       bk.DateValue                                                as PAY_BK_DATE_VALUE,
+       bk.DatePost                                                 as PAY_BK_DATE_POST,
+       // cast( bk.AcnumExt as abap.char( 256 ) ) as ACNUM_INT, -- AGAT-406138
+       @Semantics.amount.currencyCode: 'REC_BK_TCUR'
+       bk.TAmount                                                  as REC_BK_T_AMOUNT,
+       bk.Tcur                                                     as REC_BK_TCUR,
+       @Semantics.amount.currencyCode: 'PAY_BK_ACUR'
+       bk.AAmount                                                  as REC_BK_A_AMOUNT,
+       bk.Exchngrate                                               as REC_BK_EXCHNGRATE,
+       // cyc.cycle_id                            as CYCLE_ID, --AGAT-406138
+       cast( 'USD' as abap.cuky )                                  as AMOUNT_IN_USD_CURR,
+       FX.ExchangeRate                                             as Netting_rate_raw,
+       case
+       when pn.TrnsCurr = cast( 'USD' as abap.cuky )
+       then 1
+       else cast(abs(FX.ExchangeRate) as abap.dec(9,5))
+             end                                                   as NETTING_RATE_USD, // changed to Margin Dealt Ex. rate
+
+       @Semantics.amount.currencyCode:'AMOUNT_IN_USD_CURR'
+       cast(
+       case
+        when pn.TrnsCurr = cast( 'USD' as abap.cuky )
+        then curr_to_decfloat_amount(bk.TAmount)
+        else
+       currency_conversion(amount             => curr_to_decfloat_amount(bk.TAmount),
+                            source_currency    => pn.TrnsCurr  ,
+                            target_currency    => cast( 'USD' as abap.cuky ) ,
+                            exchange_rate_date     => FX_IP.ValidityStartDate,
+       //  exchange_rate_type => cast(CONSTVAL.low as abap.char(4)),//'ZT09', --AGAT-406138
+                            exchange_rate_type => $parameters.P_Excng_rate_typ ,// ++AGAT-406138
+                             error_handling => 'SET_TO_NULL'    )
+                             end as abap.dec(15,2) )
+
+                                                                   as AMOUNT_IN_USD,
+       case
+         when bk.TAmount > 0 then 'Payments'
+         else 'Recipient'
+       end                                                         as TRANS_POSITION,
+       bk.BupaName                                                 as PAY_BK_BUPA_NAME,
+       bk.BupaNo                                                   as PARTNER,
+       case
+         when bk.TAmount > 0
+         then 'BUY'
+         when bk.TAmount < 0
+         then 'SELL'
+         else ''
+       end                                                         as DIRECTION,
+       cyc.value_dats                                              as NETTING_DATE,
+       PO_Status.StatusText                                        as PO_STATUS,
+       TT.Description                                              as TRNS_TYPE_DS,
+       bkk42.Prodint                                               as PRODUCT_ID,
+       bkk42.Actext                                                as ACC_DESCRIPTION,
+       // BOC AGAT-406138
+       FX_Rate.ValidityStartDate                                   as Ip_date, //check if date enter by user has date
+       cast(FX_Rate.ExchangeRate  as abap.dec(9,5))                as IP_date_Ex_rate, // check if rate for user enter date exists
+       FX_Input_rate.ValidityStartDate                             as latest_date, // rate for latest available date
+       case
+       when bk.Acur = bk.Tcur
+       then 1
+       when FX_Rate.ExchangeRate  is not initial
+       then  cast(FX_Rate.ExchangeRate as abap.dec(9,5))
+       else cast(FX_Input_rate.ExchangeRate as abap.dec(9,5))  end as Pre_final_netting_rate,
+       @Semantics.amount.currencyCode:'PAY_BK_ACUR'
+       cast(
+        case
+        when bk.Acur = bk.Tcur
+        then curr_to_decfloat_amount(bk.TAmount)
+       //If data exists for user input date then use user input date
+        when FX_Rate.ValidityStartDate <> '00000000'
+        then
+       currency_conversion(amount             => curr_to_decfloat_amount(bk.TAmount),
+                            source_currency    => bk.Tcur  ,
+                            target_currency    => bk.Acur,
+                            exchange_rate_date     => FX_Rate.ValidityStartDate,
+                            exchange_rate_type => $parameters.P_Excng_rate_typ  ,
+                             error_handling => 'SET_TO_NULL'    )
+       else
+       //else take the latest available date and do the conversion
+       currency_conversion(amount             => curr_to_decfloat_amount(bk.TAmount),
+                            source_currency    => bk.Tcur  ,
+                            target_currency    => bk.Acur,
+                            exchange_rate_date     => FX_Input_rate.ValidityStartDate,
+                            exchange_rate_type => $parameters.P_Excng_rate_typ,
+                             error_handling => 'SET_TO_NULL'    )
+
+                             end as abap.dec(15,2) )
+
+
+
+                                                                   as Amount_in_acc_curr,
+
+//       @ObjectModel.virtualElement: true
+//       @ObjectModel.virtualElementCalculatedBy: 'ABAP:ZCL_TMS_NETTING_DTL'
+      // cast( 0 as abap.dec( 15, 2 ) )                as Amount_in_acc_curr,
+       $parameters.P_Excng_rate_typ                                as ex_rate_type
+       // EOC AGAT-406138
+}
+where
+  bk.DatePost between PREV_CYC.prev_date and cyc.value_dats //++ AGAT-406138
+  and cyc.status = 'R' //++ AGAT-406138
