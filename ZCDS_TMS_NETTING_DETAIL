@@ -236,3 +236,17 @@ define view entity ZCDS_TMS_NETTING_DETAIL
 where
   bk.DatePost between PREV_CYC.prev_date and cyc.value_dats //++ AGAT-406138
   and cyc.status = 'R' //++ AGAT-406138
+
+
+
+
+currency_conversion is not calculating the amount value 
+ 
+for below combination 
+ 
+exchng rate type : ZT09
+From Curr : EUR
+To Curr : GBP
+ 
+just review that and let me know the issue
+ 
