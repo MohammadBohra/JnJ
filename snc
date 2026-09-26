@@ -1,0 +1,15 @@
+System Name       = LFI
+Message Server    = cslfi.jnj.com
+Port              = 3600
+Logon Group       = PUBLIC
+SNC Partner Name  = p:CN=SAP/SA-ITS-SAPSNCCFNNP@JNJ.COM
+SNC QOP           = 9
+User              = MYSAPSSO
+Language          = EN
+Transaction       = SMEN
+
+
+
+GuiParm="/M/cslfi.jnj.com/S/3600/G/PUBLIC
+SNC_PARTNERNAME="p:CN=SAP/SA-ITS-SAPSNCCFNNP@JNJ.COM"
+SNC_QOP=9"
