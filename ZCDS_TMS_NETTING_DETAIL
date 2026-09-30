@@ -249,4 +249,45 @@ From Curr : EUR
 To Curr : GBP
  
 just review that and let me know the issue
+
+@AccessControl.authorizationCheck: #NOT_REQUIRED
+@EndUserText.label: 'Test Currency Conversion EUR GBP'
+
+define view entity ZI_TEST_CURR_CONV
+  as select from t000
+{
+  key mandt as Client,
+
+  cast( 100 as abap.curr( 15, 2 ) ) as AmountEUR,
+
+  cast( 'EUR' as abap.cuky ) as SourceCurrency,
+
+  cast( 'GBP' as abap.cuky ) as TargetCurrency,
+
+  currency_conversion(
+      amount             => cast( 100 as abap.curr( 15, 2 ) ),
+      source_currency    => cast( 'EUR' as abap.cuky ),
+      target_currency    => cast( 'GBP' as abap.cuky ),
+      exchange_rate_date => $session.system_date,
+      exchange_rate_type => 'ZT09',
+      error_handling     => 'SET_TO_NULL'
+  ) as AmountGBP
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+******************************************************************************************************************
+
  
