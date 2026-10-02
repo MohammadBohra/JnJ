@@ -1,0 +1,48 @@
+@AbapCatalog.sqlViewName: 'ZPOSVALCUBEXT'
+@EndUserText.label: 'Replication View for Treasury Position Valuation Cube'
+
+/* REQUIREMENT 1: Make it replicable in Data Hub / Datasphere */
+@Analytics.dataCategory: #CUBE
+@Analytics.dataExtraction.enabled: true
+
+/* REQUIREMENT 2: Enable Delta replication based on last replication timestamp */
+@Analytics.dataExtraction.delta.byElement: {
+    name: 'LastChangeDateTime', // Must be a UTC timestamp/date field existing in the view
+    maxDelayInSeconds: 1800     // 30 mins safety window for pending database commits
+}
+
+define view Z_C_FTR_ATPV_CUBE_EXT
+  with parameters
+    /* REQUIREMENT 3: Add input parameter for Hedge Instrument */
+    p_hedgeinstrument : ftr_hedging_instr // Adjust data element if your system requires a different type
+    
+  as select from I_FTR_ATPV_CUBE 
+{
+  // 1. Expose all necessary business fields from the base standard view
+  key TreasuryPosition,
+      CompanyCode,
+      HedgeInstrument,
+      LastChangeDateTime, // This field is mandatory here to track delta changes
+      
+      /* Project other standard columns as needed */
+      I_FTR_ATPV_CUBE.FinancialTransaction
+      
+} where HedgeInstrument = :p_hedgeinstrument
+
+
+
+
+  
+Step-by-Step Configuration Requirements
+1. Data Hub / Datasphere ODP Visibility (Requirement 1)
+The critical annotation here is @Analytics.dataExtraction.enabled: true. Once this is deployed and activated in your S/4HANA system, it registers the custom CDS view into the SAPI/ODP framework. It will automatically show up under the CDS_EXTRACTION context folder when you pull sources into your Data Hub pipeline or SAP Datasphere Replication Flow.
+2. Delta Handling Setup (Requirement 2)
+Using @Analytics.dataExtraction.delta.byElement tells the replication engine to perform generic timestamp-based delta loading.
+• The Condition: The field specified under name: (e.g., LastChangeDateTime) must exist in the select list of your view and should natively record when data rows are added or altered.
+• How it works: During execution, Data Hub tracks the maximum timestamp from the last successful extraction block. In the next execution delta loop, it queries your view implicitly appending a hidden filter condition (where LastChangeDateTime > :last_replication_timestamp).
+• Safety Interval: The maxDelayInSeconds: 1800 annotation is highly recommended to protect against missing uncommitted database changes near runtime limits.
+3. Parameter Consumption (Requirement 3)
+When creating a custom pipeline or setting up the Replication Flow Projection inside the target data hub, the application layer will prompt you to provide a value for p_hedgeinstrument. The framework pushes this runtime value straight down into the database select condition (:p_hedgeinstrument) to strip out unneeded data immediately before processing deltas.
+To ensure the code runs flawlessly, let me know:
+• What is the exact timestamp field name available inside your standard I_FTR_ATPV_CUBE view that we can leverage for delta monitoring?
+• Do you require a sample syntax layout for an alternate Change Data Capture (CDC/Trigger-based) delta approach instead of timestamp filtering?
